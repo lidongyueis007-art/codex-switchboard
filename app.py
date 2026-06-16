@@ -39,6 +39,7 @@ TEXT = {
         "type": "Type",
         "api_key": "API Key (only for API accounts)",
         "org_project": "Org ID / Project ID (optional)",
+        "base_url": "Base URL (optional, OpenAI-compatible endpoint)",
         "save_account": "Save Account",
         "import_auth": "Import auth.json",
         "export_selected": "Export Selected",
@@ -93,6 +94,7 @@ TEXT = {
         "type": "类型",
         "api_key": "API Key（仅 API 账号使用）",
         "org_project": "Org ID / Project ID（可选）",
+        "base_url": "Base URL（可选，OpenAI 兼容接口）",
         "save_account": "保存账号",
         "import_auth": "导入 auth.json",
         "export_selected": "导出选中账号",
@@ -382,15 +384,19 @@ class Store:
         write_json(SETTINGS_FILE, self.settings)
         return profile_from_dict(profile)
 
-    def save_api_profile(self, name: str, api_key: str, org_id: str = "", project_id: str = ""):
+    def save_api_profile(self, name: str, api_key: str, org_id: str = "", project_id: str = "", base_url: str = ""):
         api_key = api_key.strip()
+        base_url = base_url.strip()
         if not api_key:
             raise ValueError("API key is required.")
+        if base_url and not base_url.lower().startswith(("http://", "https://")):
+            raise ValueError("Base URL must start with http:// or https://.")
         key = self._next_key(name)
         payload = {
             "api_key": api_key,
             "org_id": org_id.strip(),
             "project_id": project_id.strip(),
+            "base_url": base_url,
             "saved_at": now_iso(),
         }
         old = read_json(self.profile_meta_path(key), {})
@@ -463,6 +469,8 @@ class Store:
                 env["OPENAI_ORGANIZATION"] = creds["org_id"]
             if creds.get("project_id"):
                 env["OPENAI_PROJECT_ID"] = creds["project_id"]
+            if creds.get("base_url"):
+                env["OPENAI_BASE_URL"] = creds["base_url"]
         return env
 
     def rename_profile(self, key: str, new_name: str):
@@ -498,6 +506,7 @@ class Store:
             "api_key": creds["api_key"],
             "org_id": creds.get("org_id", ""),
             "project_id": creds.get("project_id", ""),
+            "base_url": creds.get("base_url", ""),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         return out
 
@@ -740,6 +749,7 @@ class SwitchboardApp:
         self.api_key = StringVar()
         self.api_org = StringVar()
         self.api_project = StringVar()
+        self.api_base_url = StringVar()
         self.codex_path = StringVar(value="")
         self.source_choice = StringVar()
         self.target_choice = StringVar()
@@ -830,14 +840,16 @@ class SwitchboardApp:
         ttk.Label(manage, text=self.t("org_project"), style="Body.TLabel").grid(row=7, column=0, sticky="w", pady=(8, 2))
         Entry(manage, textvariable=self.api_org, font=("Consolas", 9), relief="solid", borderwidth=1).grid(row=8, column=0, sticky="ew", ipady=4)
         Entry(manage, textvariable=self.api_project, font=("Consolas", 9), relief="solid", borderwidth=1).grid(row=9, column=0, sticky="ew", pady=(5, 0), ipady=4)
-        ttk.Button(manage, text=self.t("save_account"), command=self.save_account).grid(row=10, column=0, sticky="ew", pady=(12, 4))
-        ttk.Button(manage, text=self.t("import_auth"), command=self.import_auth).grid(row=11, column=0, sticky="ew", pady=4)
-        ttk.Button(manage, text=self.t("export_selected"), command=self.export_selected).grid(row=12, column=0, sticky="ew", pady=4)
-        ttk.Button(manage, text=self.t("rename_selected"), command=self.rename_selected).grid(row=13, column=0, sticky="ew", pady=4)
-        ttk.Button(manage, text=self.t("delete_selected"), command=self.delete_selected).grid(row=14, column=0, sticky="ew", pady=4)
-        ttk.Label(manage, text="Codex.exe", style="Body.TLabel").grid(row=15, column=0, sticky="w", pady=(12, 2))
-        Entry(manage, textvariable=self.codex_path, font=("Consolas", 8), relief="solid", borderwidth=1).grid(row=16, column=0, sticky="ew", ipady=4)
-        ttk.Button(manage, text=self.t("detect_codex"), command=self.detect_codex_path).grid(row=17, column=0, sticky="ew", pady=(7, 0))
+        ttk.Label(manage, text=self.t("base_url"), style="Body.TLabel").grid(row=10, column=0, sticky="w", pady=(8, 2))
+        Entry(manage, textvariable=self.api_base_url, font=("Consolas", 9), relief="solid", borderwidth=1).grid(row=11, column=0, sticky="ew", ipady=4)
+        ttk.Button(manage, text=self.t("save_account"), command=self.save_account).grid(row=12, column=0, sticky="ew", pady=(12, 4))
+        ttk.Button(manage, text=self.t("import_auth"), command=self.import_auth).grid(row=13, column=0, sticky="ew", pady=4)
+        ttk.Button(manage, text=self.t("export_selected"), command=self.export_selected).grid(row=14, column=0, sticky="ew", pady=4)
+        ttk.Button(manage, text=self.t("rename_selected"), command=self.rename_selected).grid(row=15, column=0, sticky="ew", pady=4)
+        ttk.Button(manage, text=self.t("delete_selected"), command=self.delete_selected).grid(row=16, column=0, sticky="ew", pady=4)
+        ttk.Label(manage, text="Codex.exe", style="Body.TLabel").grid(row=17, column=0, sticky="w", pady=(12, 2))
+        Entry(manage, textvariable=self.codex_path, font=("Consolas", 8), relief="solid", borderwidth=1).grid(row=18, column=0, sticky="ew", ipady=4)
+        ttk.Button(manage, text=self.t("detect_codex"), command=self.detect_codex_path).grid(row=19, column=0, sticky="ew", pady=(7, 0))
 
         inherit = self._panel(main, 1, 0, columnspan=2)
         inherit.columnconfigure((0, 2), weight=1)
@@ -999,10 +1011,11 @@ class SwitchboardApp:
             return
         try:
             if self.account_type.get() == "API":
-                profile = self.store.save_api_profile(name, self.api_key.get(), self.api_org.get(), self.api_project.get())
+                profile = self.store.save_api_profile(name, self.api_key.get(), self.api_org.get(), self.api_project.get(), self.api_base_url.get())
                 self.api_key.set("")
                 self.api_org.set("")
                 self.api_project.set("")
+                self.api_base_url.set("")
             else:
                 profile = self.store.save_chatgpt_from_current_auth(name)
             self.new_name.set("")

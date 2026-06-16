@@ -7,7 +7,7 @@ Codex 接力台是一个本地 Windows 桌面工具，适合同时使用多个 C
 ## Features / 功能
 
 - **Multi-account launch / 多账号启动**: save account profiles and launch each one with its own `CODEX_HOME` and Chromium `--user-data-dir`.
-- **ChatGPT and API accounts / 支持 ChatGPT 与 API 账号**: capture an existing Codex App ChatGPT login, or save an API key profile with optional organization and project IDs.
+- **ChatGPT and API accounts / 支持 ChatGPT 与 API 账号**: capture an existing Codex App ChatGPT login, or save an API key profile with optional organization, project, and base URL settings.
 - **Account inheritance / 账号继承**: copy local Codex state from account A to account B while preserving B's identity.
 - **Project Library / 项目大全**: scan local Codex projects and conversations, then transfer a whole project or one conversation into any saved account.
 - **Bilingual interface / 双语界面**: switch between English and Chinese in the top-right corner.
@@ -38,6 +38,7 @@ CODEX_HOME=<account isolated home>
 OPENAI_API_KEY=<API account key, when applicable>
 OPENAI_ORG_ID / OPENAI_ORGANIZATION=<optional>
 OPENAI_PROJECT_ID=<optional>
+OPENAI_BASE_URL=<optional OpenAI-compatible endpoint>
 --user-data-dir=<account isolated browser profile>
 ```
 
@@ -77,7 +78,7 @@ You can then copy the EXE anywhere, for example to the Windows desktop.
 1. Open Codex App normally and sign in if you want to save a ChatGPT account.
 2. Open Codex Switchboard.
 3. For a ChatGPT account, choose `ChatGPT`, enter a profile name, then click `Save Account`.
-4. For an API account, choose `API`, enter a profile name and API key, then click `Save Account`.
+4. For an API account, choose `API`, enter a profile name and API key, optionally set Org ID, Project ID, or Base URL, then click `Save Account`.
 5. Select an account and click `Launch Selected`.
 6. Use `Account Inheritance` to copy local state from one account to another.
 7. Use `Project Library` to move one project or one conversation into a selected account.

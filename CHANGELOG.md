@@ -6,6 +6,7 @@ Initial public version.
 
 初始公开版本。
 
+- Added optional API account Base URL support through `OPENAI_BASE_URL`.
 - Added isolated Codex App launching for multiple accounts.
 - Added ChatGPT account snapshot saving.
 - Added API-key account profiles.
@@ -14,6 +15,7 @@ Initial public version.
 - Added Chinese and English UI switching.
 - Added Windows DPAPI secret storage.
 
+- 支持 API 账号配置可选 Base URL，并通过 `OPENAI_BASE_URL` 注入。
 - 支持多账号隔离启动 Codex App。
 - 支持保存 ChatGPT 账号快照。
 - 支持 API Key 账号。
