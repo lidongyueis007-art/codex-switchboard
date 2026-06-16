@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Build outputs
+build/
+dist/
+*.spec
+
+# Local research and scratch space
+research/
+tmp/
+temp/
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db
+
+# Local Codex/account material. These should never be committed.
+.codex/
+CodexSwitchboard/
+auth.json
+*.dpapi
+*.key
+*.pem
+*.p12
+*.pfx
+.env
+.env.*
