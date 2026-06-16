@@ -23,6 +23,14 @@ DEFAULT_AUTH_FILE = DEFAULT_CODEX_HOME / "auth.json"
 
 PROFILE_CHATGPT = "chatgpt"
 PROFILE_API = "api"
+OPENAI_ENV_VARS = (
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "OPENAI_ORG_ID",
+    "OPENAI_ORGANIZATION",
+    "OPENAI_PROJECT_ID",
+    "OPENAI_BASE_URL",
+)
 
 TEXT = {
     "en": {
@@ -34,6 +42,7 @@ TEXT = {
         "launch_selected": "Launch Selected",
         "set_default": "Set As Default",
         "open_instance": "Open Instance Folder",
+        "sync_login": "Sync Refreshed Login",
         "account_manager": "Account Manager",
         "name": "Name",
         "type": "Type",
@@ -68,6 +77,8 @@ TEXT = {
         "deleted": "Deleted selected account snapshot",
         "default_switched": "Default Codex auth switched to: {name}",
         "launched": "Launched {name} ({kind}) with CODEX_HOME={home}",
+        "launch_warning": "Launch may have been swallowed by Codex single-instance behavior. No new live Codex process was detected.",
+        "synced_login": "Synced refreshed ChatGPT login back to snapshot: {name}",
         "inherited": "Inherited {count} item(s): {source} -> {target}",
         "skipped": "Skipped: {items}",
         "detected": "Detected Codex.exe: {path}",
@@ -89,6 +100,7 @@ TEXT = {
         "launch_selected": "启动选中账号",
         "set_default": "设为默认账号",
         "open_instance": "打开实例目录",
+        "sync_login": "同步刷新登录态",
         "account_manager": "账号管理",
         "name": "名称",
         "type": "类型",
@@ -123,6 +135,8 @@ TEXT = {
         "deleted": "已删除选中的账号快照",
         "default_switched": "默认 Codex 登录已切换到：{name}",
         "launched": "已启动 {name}（{kind}），CODEX_HOME={home}",
+        "launch_warning": "这次启动可能被 Codex 单实例机制吞掉了：没有检测到新的存活 Codex 进程。",
+        "synced_login": "已把刷新的 ChatGPT 登录态同步回快照：{name}",
         "inherited": "已继承 {count} 项：{source} -> {target}",
         "skipped": "已跳过：{items}",
         "detected": "已检测到 Codex.exe：{path}",
@@ -171,6 +185,24 @@ def read_json(path: Path, fallback):
 def write_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def set_toml_root_string(path: Path, key: str, value: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines() if path.exists() else []
+    replacement = f'{key} = "{value}"'
+    updated = []
+    replaced = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(f"{key} ") or stripped.startswith(f"{key}="):
+            updated.append(replacement)
+            replaced = True
+        else:
+            updated.append(line)
+    if not replaced:
+        updated.append(replacement)
+    path.write_text("\n".join(updated).rstrip() + "\n", encoding="utf-8")
 
 
 def slugify(value: str) -> str:
@@ -429,6 +461,25 @@ class Store:
             raise FileNotFoundError("Selected API account secret was not found.")
         return json.loads(unprotect_bytes(path.read_bytes()).decode("utf-8"))
 
+    def sync_chatgpt_from_instance(self, key: str):
+        profile = self.get_profile(key)
+        if not profile:
+            raise FileNotFoundError("Selected account metadata was not found.")
+        if profile.kind != PROFILE_CHATGPT:
+            raise ValueError("Only ChatGPT account snapshots can sync refreshed auth.json.")
+        auth = self.codex_home(key) / "auth.json"
+        if not auth.exists():
+            raise FileNotFoundError("Instance auth.json was not found. Launch this account once first.")
+        auth_data = auth.read_bytes()
+        json.loads(auth_data.decode("utf-8"))
+        self.profile_secret_path(key).write_bytes(protect_bytes(auth_data))
+        data = read_json(self.profile_meta_path(key), {})
+        data["label"] = detect_auth_label(auth_data)
+        data["sha256"] = sha256(auth_data)
+        data["updated_at"] = now_iso()
+        write_json(self.profile_meta_path(key), data)
+        return profile_from_dict(data)
+
     def prepare_instance(self, key: str):
         profile = self.get_profile(key)
         if not profile:
@@ -438,7 +489,9 @@ class Store:
         home.mkdir(parents=True, exist_ok=True)
         browser.mkdir(parents=True, exist_ok=True)
         if profile.kind == PROFILE_CHATGPT:
-            (home / "auth.json").write_bytes(self.auth_bytes(key))
+            auth = home / "auth.json"
+            if not auth.exists():
+                auth.write_bytes(self.auth_bytes(key))
         else:
             auth = home / "auth.json"
             if auth.exists():
@@ -446,6 +499,7 @@ class Store:
         config = home / "config.toml"
         if not config.exists() and (DEFAULT_CODEX_HOME / "config.toml").exists():
             shutil.copy2(DEFAULT_CODEX_HOME / "config.toml", config)
+        set_toml_root_string(config, "preferred_auth_method", "chatgpt" if profile.kind == PROFILE_CHATGPT else "apikey")
         write_json(self.instance_dir(key) / "instance.json", {
             "profile_key": key,
             "profile_name": profile.name,
@@ -456,11 +510,35 @@ class Store:
         })
         return home, browser
 
+    def instance_meta(self, key: str):
+        return read_json(self.instance_dir(key) / "instance.json", {})
+
+    def record_launch(self, key: str, pid: int, detected_pids):
+        data = self.instance_meta(key)
+        data["last_launch_at"] = now_iso()
+        data["last_launch_pid"] = pid
+        data["last_detected_pids"] = sorted(int(item) for item in detected_pids)
+        write_json(self.instance_dir(key) / "instance.json", data)
+
+    def recorded_running_status(self, key: str):
+        data = self.instance_meta(key)
+        pids = set(data.get("last_detected_pids") or [])
+        if data.get("last_launch_pid"):
+            pids.add(data["last_launch_pid"])
+        live = sorted(pid for pid in pids if process_is_alive(pid))
+        if live:
+            return f"running:{','.join(str(pid) for pid in live[:3])}"
+        if data.get("last_launch_at"):
+            return "last-launch-stopped"
+        return "not-launched"
+
     def launch_env(self, key: str):
         profile = self.get_profile(key)
         env = os.environ.copy()
         env["CODEX_HOME"] = str(self.codex_home(key))
         env["CODEX_DISABLE_UPDATE_CHECK"] = "1"
+        for name in OPENAI_ENV_VARS:
+            env.pop(name, None)
         if profile and profile.kind == PROFILE_API:
             creds = self.api_credentials(key)
             env["OPENAI_API_KEY"] = creds["api_key"]
@@ -711,6 +789,31 @@ def run_cmd(args, timeout=8):
         return 1, "", str(exc)
 
 
+def codex_process_ids(codex_exe: str = ""):
+    path_filter = ""
+    if codex_exe:
+        escaped = codex_exe.replace("'", "''")
+        path_filter = f" | Where-Object {{ $_.Path -eq '{escaped}' }}"
+    command = f"Get-Process Codex -ErrorAction SilentlyContinue{path_filter} | Select-Object -ExpandProperty Id"
+    code, out, _ = run_cmd(["powershell", "-NoProfile", "-Command", command], timeout=6)
+    if code != 0 or not out:
+        return set()
+    ids = set()
+    for line in out.splitlines():
+        try:
+            ids.add(int(line.strip()))
+        except ValueError:
+            pass
+    return ids
+
+
+def process_is_alive(pid: int):
+    if not pid:
+        return False
+    code, _, _ = run_cmd(["powershell", "-NoProfile", "-Command", f"Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue | Out-Null"], timeout=4)
+    return code == 0
+
+
 def find_codex_exe() -> str:
     code, out, _ = run_cmd(["powershell", "-NoProfile", "-Command", "Get-Process Codex -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path"], timeout=6)
     if code == 0 and out and Path(out.splitlines()[0]).exists():
@@ -822,10 +925,11 @@ class SwitchboardApp:
 
         account_buttons = ttk.Frame(accounts, style="Panel.TFrame")
         account_buttons.grid(row=3, column=0, sticky="ew", pady=(14, 0))
-        account_buttons.columnconfigure((0, 1, 2), weight=1)
+        account_buttons.columnconfigure((0, 1, 2, 3), weight=1)
         ttk.Button(account_buttons, text=self.t("launch_selected"), style="Primary.TButton", command=self.launch_selected).grid(row=0, column=0, sticky="ew", padx=(0, 8))
         ttk.Button(account_buttons, text=self.t("set_default"), command=self.switch_default).grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(account_buttons, text=self.t("open_instance"), command=self.open_instance_folder).grid(row=0, column=2, sticky="ew", padx=(8, 0))
+        ttk.Button(account_buttons, text=self.t("sync_login"), command=self.sync_selected_login).grid(row=0, column=2, sticky="ew", padx=4)
+        ttk.Button(account_buttons, text=self.t("open_instance"), command=self.open_instance_folder).grid(row=0, column=3, sticky="ew", padx=(8, 0))
 
         manage = self._panel(main, 0, 1, pady=(0, 12))
         manage.columnconfigure(0, weight=1)
@@ -940,7 +1044,8 @@ class SwitchboardApp:
             else:
                 active = "api-key"
             prepared = "ready" if (self.store.instance_dir(profile.key) / "instance.json").exists() else "new"
-            self.account_list.insert(END, f"{profile.name}    {profile.kind.upper()}    {profile.label}    [{active} / {prepared}]")
+            running = self.store.recorded_running_status(profile.key)
+            self.account_list.insert(END, f"{profile.name}    {profile.kind.upper()}    {profile.label}    [{active} / {prepared} / {running}]")
             self.profile_keys.append(profile.key)
         names = [f"{p.name} [{p.kind}] ({p.key})" for p in profiles]
         self.source_keys = [p.key for p in profiles]
@@ -1096,6 +1201,18 @@ class SwitchboardApp:
         except Exception as exc:
             messagebox.showerror(APP_NAME, str(exc))
 
+    def sync_selected_login(self):
+        key = self.selected_key()
+        if not key:
+            messagebox.showwarning(APP_NAME, self.t("select_account"))
+            return
+        try:
+            profile = self.store.sync_chatgpt_from_instance(key)
+            self.log_line(self.t("synced_login", name=profile.name))
+            self.refresh()
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, str(exc))
+
     def launch_selected(self):
         key = self.selected_key()
         if not key:
@@ -1106,9 +1223,17 @@ class SwitchboardApp:
             _, browser = self.store.prepare_instance(key)
             env = self.store.launch_env(key)
             profile = self.store.get_profile(key)
-            launch_codex_instance(codex_exe, browser, env)
-            time.sleep(0.5)
+            before = codex_process_ids(codex_exe)
+            proc = launch_codex_instance(codex_exe, browser, env)
+            time.sleep(1.2)
+            after = codex_process_ids(codex_exe)
+            detected = after - before
+            if process_is_alive(proc.pid):
+                detected.add(proc.pid)
+            self.store.record_launch(key, proc.pid, detected)
             self.log_line(self.t("launched", name=profile.name, kind=profile.kind, home=env["CODEX_HOME"]))
+            if not detected:
+                self.log_line(self.t("launch_warning"))
             self.refresh()
         except Exception as exc:
             messagebox.showerror(APP_NAME, str(exc))
