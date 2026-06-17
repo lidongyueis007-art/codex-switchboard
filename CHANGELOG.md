@@ -12,6 +12,8 @@ Initial public version.
 - Stopped overwriting live ChatGPT instance `auth.json` on every launch.
 - Added refreshed ChatGPT login sync from instance back to saved snapshot.
 - Added launch PID tracking and a warning for possible Codex single-instance swallowing.
+- Reworked the UI into a CCSwitch-inspired Codex-only flow: Home, Configs, Unified Projects, Running, and Settings.
+- Simplified API configuration to name, API key, API URL, and note.
 - Added isolated Codex App launching for multiple accounts.
 - Added ChatGPT account snapshot saving.
 - Added API-key account profiles.
@@ -26,6 +28,8 @@ Initial public version.
 - 不再每次启动都覆盖 ChatGPT 实例里的活 `auth.json`。
 - 支持把实例里刷新后的 ChatGPT 登录态同步回保存快照。
 - 增加启动 PID 追踪，并在疑似被 Codex 单实例机制吞掉时提示。
+- 将界面调整为参考 CCSwitch 气质的 Codex 专用流程：首页、配置、统一项目、运行中、设置。
+- 将 API 配置收窄为名称、API Key、API 地址和备注。
 - 支持多账号隔离启动 Codex App。
 - 支持保存 ChatGPT 账号快照。
 - 支持 API Key 账号。

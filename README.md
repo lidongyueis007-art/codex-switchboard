@@ -1,15 +1,16 @@
 # Codex Switchboard / Codex 接力台
 
-Codex Switchboard is a local Windows desktop launcher for people who use more than one Codex identity. It can start isolated Codex App windows for different ChatGPT or API-key accounts, copy useful local state between accounts, and move individual projects or conversations into the account where you want to continue working.
+Codex Switchboard is a Codex-only CCSwitch-style launcher for people who need multiple Codex API or ChatGPT configurations open at the same time. It keeps the product narrow: save API keys and API URLs, save ChatGPT account snapshots, launch multiple Codex windows, and relay projects between configurations.
 
-Codex 接力台是一个本地 Windows 桌面工具，适合同时使用多个 Codex 身份的人。它可以为不同的 ChatGPT 账号或 API Key 账号启动隔离的 Codex App 窗口，也可以在账号之间继承本地状态，并把某个项目或某段对话转移到指定账号下继续工作。
+Codex 接力台是一个只面向 Codex 的 CCSwitch 风格启动器，适合同时使用多个 Codex API 或 ChatGPT 配置的人。它刻意保持功能收窄：保存 API Key 和 API 地址、保存 ChatGPT 账号快照、多开 Codex 窗口，并把项目接力到另一个配置继续工作。
 
 ## Features / 功能
 
-- **Multi-account launch / 多账号启动**: save account profiles and launch each one with its own `CODEX_HOME` and Chromium `--user-data-dir`.
-- **ChatGPT and API accounts / 支持 ChatGPT 与 API 账号**: capture an existing Codex App ChatGPT login, or save an API key profile with optional organization, project, and base URL settings.
-- **Account inheritance / 账号继承**: copy local Codex state from account A to account B while preserving B's identity.
-- **Project Library / 项目大全**: scan local Codex projects and conversations, then transfer a whole project or one conversation into any saved account.
+- **Codex-only configuration list / Codex 专用配置列表**: no provider marketplace, no generic AI gateway, only API and ChatGPT configurations for Codex.
+- **API configuration / API 配置**: save a name, API key, API URL, and note.
+- **ChatGPT configuration / ChatGPT 配置**: capture an existing Codex App ChatGPT login or import `auth.json`.
+- **Codex multi-open / Codex 多开**: launch multiple Codex windows from different configurations.
+- **Unified Projects / 统一项目**: relay one project or conversation into another configuration so work can continue after switching API or account.
 - **Auth isolation / 鉴权隔离**: scrub global OpenAI environment variables before launch, then inject only the selected API profile's credentials.
 - **Instance tracking / 实例追踪**: record launch PIDs and warn when Codex appears to swallow a launch through single-instance behavior.
 - **Refreshed login sync / 刷新登录态同步**: keep live ChatGPT instance tokens from being overwritten, and sync refreshed `auth.json` back into the saved snapshot when needed.
@@ -84,12 +85,10 @@ You can then copy the EXE anywhere, for example to the Windows desktop.
 
 1. Open Codex App normally and sign in if you want to save a ChatGPT account.
 2. Open Codex Switchboard.
-3. For a ChatGPT account, choose `ChatGPT`, enter a profile name, then click `Save Account`.
-4. For an API account, choose `API`, enter a profile name and API key, optionally set Org ID, Project ID, or Base URL, then click `Save Account`.
-5. Select an account and click `Launch Selected`.
-6. For ChatGPT accounts, click `Sync Refreshed Login` after Codex has refreshed the instance login and you want to save that refreshed `auth.json` back to the encrypted snapshot.
-7. Use `Account Inheritance` to copy local state from one account to another.
-8. Use `Project Library` to move one project or one conversation into a selected account.
+3. On `配置`, add an API configuration with name, API key, API URL, and note, or add a ChatGPT configuration from the current Codex login.
+4. On `首页`, select a configuration and click `启动 Codex`.
+5. Open another configuration the same way when you need multi-open.
+6. On `统一项目`, relay a project or conversation into a target configuration when you want to continue with another API or account.
 
 Do not use the model's own answer to decide whether a session is using ChatGPT login or API-key auth. The reliable signals are Codex App's account/status UI, the selected Switchboard profile type, the isolated instance folder, and the launch environment shown by this tool.
 

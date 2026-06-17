@@ -321,7 +321,7 @@ def profile_from_dict(data) -> Profile:
         key=data["key"],
         name=data["name"],
         label=data.get("label", "Codex account"),
-        kind=data.get("kind", PROFILE_CHATGPT),
+        kind=data.get("kind") or PROFILE_CHATGPT,
         created_at=data.get("created_at", now_iso()),
         updated_at=data.get("updated_at", now_iso()),
         sha256=data.get("sha256", ""),
@@ -416,11 +416,13 @@ class Store:
         write_json(SETTINGS_FILE, self.settings)
         return profile_from_dict(profile)
 
-    def save_api_profile(self, name: str, api_key: str, org_id: str = "", project_id: str = "", base_url: str = ""):
+    def save_api_profile(self, name: str, api_key: str, org_id: str = "", project_id: str = "", base_url: str = "", note: str = ""):
         api_key = api_key.strip()
         base_url = base_url.strip()
         if not api_key:
             raise ValueError("API key is required.")
+        if not base_url:
+            raise ValueError("API URL is required.")
         if base_url and not base_url.lower().startswith(("http://", "https://")):
             raise ValueError("Base URL must start with http:// or https://.")
         key = self._next_key(name)
@@ -429,6 +431,7 @@ class Store:
             "org_id": org_id.strip(),
             "project_id": project_id.strip(),
             "base_url": base_url,
+            "note": note.strip(),
             "saved_at": now_iso(),
         }
         old = read_json(self.profile_meta_path(key), {})
@@ -448,6 +451,39 @@ class Store:
         self.settings["last_profile"] = key
         write_json(SETTINGS_FILE, self.settings)
         return profile_from_dict(profile)
+
+    def update_api_profile(self, key: str, name: str, api_key: str = "", base_url: str = "", note: str = ""):
+        profile = self.get_profile(key)
+        if not profile:
+            raise FileNotFoundError("Selected account metadata was not found.")
+        if profile.kind != PROFILE_API:
+            raise ValueError("Only API configurations can be edited here.")
+        creds = self.api_credentials(key)
+        api_key = api_key.strip() or creds.get("api_key", "")
+        base_url = base_url.strip()
+        if not api_key:
+            raise ValueError("API key is required.")
+        if not base_url:
+            raise ValueError("API URL is required.")
+        if base_url and not base_url.lower().startswith(("http://", "https://")):
+            raise ValueError("API URL must start with http:// or https://.")
+        payload = {
+            "api_key": api_key,
+            "org_id": creds.get("org_id", ""),
+            "project_id": creds.get("project_id", ""),
+            "base_url": base_url,
+            "note": note.strip(),
+            "saved_at": creds.get("saved_at", now_iso()),
+            "updated_at": now_iso(),
+        }
+        data = read_json(self.profile_meta_path(key), {})
+        data["name"] = name.strip()
+        data["label"] = f"API {masked_key(api_key)}"
+        data["updated_at"] = now_iso()
+        data["sha256"] = sha256(api_key.encode("utf-8"))
+        self.api_secret_path(key).write_bytes(protect_bytes(json.dumps(payload).encode("utf-8")))
+        write_json(self.profile_meta_path(key), data)
+        return profile_from_dict(data)
 
     def auth_bytes(self, key: str) -> bytes:
         path = self.profile_secret_path(key)
@@ -585,6 +621,7 @@ class Store:
             "org_id": creds.get("org_id", ""),
             "project_id": creds.get("project_id", ""),
             "base_url": creds.get("base_url", ""),
+            "note": creds.get("note", ""),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         return out
 
@@ -842,17 +879,24 @@ class SwitchboardApp:
         self.store = Store()
         self.lang = self.store.settings.get("language", "zh")
         self.profile_keys = []
+        self.config_keys = []
         self.source_keys = []
         self.target_keys = []
         self.library_rows = []
         self.library_target_keys = []
         self.status = StringVar(value="")
+        self.page = StringVar(value="home")
         self.new_name = StringVar()
         self.account_type = StringVar(value="ChatGPT")
         self.api_key = StringVar()
         self.api_org = StringVar()
         self.api_project = StringVar()
         self.api_base_url = StringVar()
+        self.config_name = StringVar()
+        self.config_kind = StringVar(value="API")
+        self.config_api_key = StringVar()
+        self.config_base_url = StringVar()
+        self.config_note = StringVar()
         self.codex_path = StringVar(value="")
         self.source_choice = StringVar()
         self.target_choice = StringVar()
@@ -867,17 +911,20 @@ class SwitchboardApp:
 
     def _build_style(self):
         self.root.title(APP_NAME)
-        self.root.geometry("1120x860")
-        self.root.minsize(980, 760)
-        self.root.configure(bg="#eef1f4")
+        self.root.geometry("1180x820")
+        self.root.minsize(1040, 720)
+        self.root.configure(bg="#f7f8fa")
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("TFrame", background="#eef1f4")
+        style.configure("TFrame", background="#f7f8fa")
         style.configure("Panel.TFrame", background="#ffffff", relief="flat")
-        style.configure("Title.TLabel", background="#eef1f4", foreground="#20252b", font=("Segoe UI", 18, "bold"))
-        style.configure("Sub.TLabel", background="#eef1f4", foreground="#68717c", font=("Segoe UI", 9))
+        style.configure("Title.TLabel", background="#f7f8fa", foreground="#111827", font=("Segoe UI", 18, "bold"))
+        style.configure("Sub.TLabel", background="#f7f8fa", foreground="#6b7280", font=("Segoe UI", 9))
         style.configure("PanelTitle.TLabel", background="#ffffff", foreground="#222831", font=("Segoe UI", 12, "bold"))
+        style.configure("Section.TLabel", background="#ffffff", foreground="#111827", font=("Segoe UI", 10, "bold"))
         style.configure("Body.TLabel", background="#ffffff", foreground="#59616b", font=("Segoe UI", 9))
+        style.configure("Muted.TLabel", background="#ffffff", foreground="#8a94a3", font=("Segoe UI", 8))
+        style.configure("Nav.TButton", font=("Segoe UI", 9), padding=(16, 8), background="#ffffff")
         style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(12, 8))
         style.configure("TButton", font=("Segoe UI", 9), padding=(10, 6))
 
@@ -890,126 +937,292 @@ class SwitchboardApp:
         outer = ttk.Frame(self.root, padding=18)
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(1, weight=1)
+        outer.rowconfigure(2, weight=1)
 
         header = ttk.Frame(outer)
         header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
         header.columnconfigure(0, weight=1)
         ttk.Label(header, text="Codex Switchboard", style="Title.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(header, text=self.t("subtitle"), style="Sub.TLabel").grid(row=1, column=0, sticky="w", pady=(3, 0))
-        ttk.Button(header, text=self.t("language"), command=self.toggle_language).grid(row=0, column=1, rowspan=2, sticky="e", padx=(0, 8))
-        ttk.Button(header, text=self.t("refresh"), command=self.refresh).grid(row=0, column=2, rowspan=2, sticky="e")
+        ttk.Label(header, text="Codex 专用 API / 账号多开管理器", style="Sub.TLabel").grid(row=1, column=0, sticky="w", pady=(3, 0))
+        ttk.Button(header, text="+ 添加配置", style="Primary.TButton", command=self.show_configs).grid(row=0, column=1, rowspan=2, sticky="e", padx=(0, 8))
+        ttk.Button(header, text=self.t("language"), command=self.toggle_language).grid(row=0, column=2, rowspan=2, sticky="e", padx=(0, 8))
+        ttk.Button(header, text=self.t("refresh"), command=self.refresh).grid(row=0, column=3, rowspan=2, sticky="e")
 
-        main = ttk.Frame(outer)
-        main.grid(row=1, column=0, sticky="nsew")
-        main.columnconfigure(0, weight=3)
-        main.columnconfigure(1, weight=2)
-        main.rowconfigure(0, weight=2)
-        main.rowconfigure(1, weight=1)
-        main.rowconfigure(2, weight=2)
+        nav = ttk.Frame(outer, style="Panel.TFrame", padding=4)
+        nav.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        nav.columnconfigure((0, 1, 2, 3, 4), weight=1)
+        for idx, (key, label) in enumerate((
+            ("home", "首页"),
+            ("configs", "配置"),
+            ("projects", "统一项目"),
+            ("running", "运行中"),
+            ("settings", "设置"),
+        )):
+            ttk.Button(nav, text=label, style="Nav.TButton", command=lambda value=key: self.show_page(value)).grid(row=0, column=idx, sticky="ew", padx=2)
 
-        accounts = self._panel(main, 0, 0, padx=(0, 12), pady=(0, 12))
-        accounts.rowconfigure(2, weight=1)
-        accounts.columnconfigure(0, weight=1)
-        ttk.Label(accounts, text=self.t("account_launcher"), style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(accounts, text=self.t("launcher_help"), style="Body.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 12))
-        list_frame = Frame(accounts, bg="#ffffff")
-        list_frame.grid(row=2, column=0, sticky="nsew")
-        list_frame.columnconfigure(0, weight=1)
-        list_frame.rowconfigure(0, weight=1)
-        self.account_list = Listbox(list_frame, activestyle="none", borderwidth=0, highlightthickness=1, highlightbackground="#d6dbe1", font=("Segoe UI", 10), selectbackground="#1d4ed8", selectforeground="#ffffff")
-        self.account_list.grid(row=0, column=0, sticky="nsew")
-        scroll = Scrollbar(list_frame, orient="vertical", command=self.account_list.yview)
-        scroll.grid(row=0, column=1, sticky="ns")
-        self.account_list.configure(yscrollcommand=scroll.set)
+        self.page_host = ttk.Frame(outer)
+        self.page_host.grid(row=2, column=0, sticky="nsew")
+        self.page_host.columnconfigure(0, weight=1)
+        self.page_host.rowconfigure(0, weight=1)
 
-        account_buttons = ttk.Frame(accounts, style="Panel.TFrame")
-        account_buttons.grid(row=3, column=0, sticky="ew", pady=(14, 0))
-        account_buttons.columnconfigure((0, 1, 2, 3), weight=1)
-        ttk.Button(account_buttons, text=self.t("launch_selected"), style="Primary.TButton", command=self.launch_selected).grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        ttk.Button(account_buttons, text=self.t("set_default"), command=self.switch_default).grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(account_buttons, text=self.t("sync_login"), command=self.sync_selected_login).grid(row=0, column=2, sticky="ew", padx=4)
-        ttk.Button(account_buttons, text=self.t("open_instance"), command=self.open_instance_folder).grid(row=0, column=3, sticky="ew", padx=(8, 0))
-
-        manage = self._panel(main, 0, 1, pady=(0, 12))
-        manage.columnconfigure(0, weight=1)
-        ttk.Label(manage, text=self.t("account_manager"), style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(manage, text=self.t("name"), style="Body.TLabel").grid(row=1, column=0, sticky="w", pady=(10, 2))
-        Entry(manage, textvariable=self.new_name, font=("Segoe UI", 10), relief="solid", borderwidth=1).grid(row=2, column=0, sticky="ew", ipady=5)
-        ttk.Label(manage, text=self.t("type"), style="Body.TLabel").grid(row=3, column=0, sticky="w", pady=(8, 2))
-        self.type_box = ttk.Combobox(manage, textvariable=self.account_type, state="readonly", values=["ChatGPT", "API"])
-        self.type_box.grid(row=4, column=0, sticky="ew", ipady=3)
-        ttk.Label(manage, text=self.t("api_key"), style="Body.TLabel").grid(row=5, column=0, sticky="w", pady=(8, 2))
-        Entry(manage, textvariable=self.api_key, show="*", font=("Consolas", 9), relief="solid", borderwidth=1).grid(row=6, column=0, sticky="ew", ipady=5)
-        ttk.Label(manage, text=self.t("org_project"), style="Body.TLabel").grid(row=7, column=0, sticky="w", pady=(8, 2))
-        Entry(manage, textvariable=self.api_org, font=("Consolas", 9), relief="solid", borderwidth=1).grid(row=8, column=0, sticky="ew", ipady=4)
-        Entry(manage, textvariable=self.api_project, font=("Consolas", 9), relief="solid", borderwidth=1).grid(row=9, column=0, sticky="ew", pady=(5, 0), ipady=4)
-        ttk.Label(manage, text=self.t("base_url"), style="Body.TLabel").grid(row=10, column=0, sticky="w", pady=(8, 2))
-        Entry(manage, textvariable=self.api_base_url, font=("Consolas", 9), relief="solid", borderwidth=1).grid(row=11, column=0, sticky="ew", ipady=4)
-        ttk.Button(manage, text=self.t("save_account"), command=self.save_account).grid(row=12, column=0, sticky="ew", pady=(12, 4))
-        ttk.Button(manage, text=self.t("import_auth"), command=self.import_auth).grid(row=13, column=0, sticky="ew", pady=4)
-        ttk.Button(manage, text=self.t("export_selected"), command=self.export_selected).grid(row=14, column=0, sticky="ew", pady=4)
-        ttk.Button(manage, text=self.t("rename_selected"), command=self.rename_selected).grid(row=15, column=0, sticky="ew", pady=4)
-        ttk.Button(manage, text=self.t("delete_selected"), command=self.delete_selected).grid(row=16, column=0, sticky="ew", pady=4)
-        ttk.Label(manage, text="Codex.exe", style="Body.TLabel").grid(row=17, column=0, sticky="w", pady=(12, 2))
-        Entry(manage, textvariable=self.codex_path, font=("Consolas", 8), relief="solid", borderwidth=1).grid(row=18, column=0, sticky="ew", ipady=4)
-        ttk.Button(manage, text=self.t("detect_codex"), command=self.detect_codex_path).grid(row=19, column=0, sticky="ew", pady=(7, 0))
-
-        inherit = self._panel(main, 1, 0, columnspan=2)
-        inherit.columnconfigure((0, 2), weight=1)
-        ttk.Label(inherit, text=self.t("inheritance"), style="PanelTitle.TLabel").grid(row=0, column=0, columnspan=4, sticky="w")
-        ttk.Label(inherit, text=self.t("inherit_help"), style="Body.TLabel").grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 14))
-        ttk.Label(inherit, text=self.t("source_a"), style="Body.TLabel").grid(row=2, column=0, sticky="w")
-        ttk.Label(inherit, text=self.t("target_b"), style="Body.TLabel").grid(row=2, column=2, sticky="w")
-        self.source_box = ttk.Combobox(inherit, textvariable=self.source_choice, state="readonly")
-        self.source_box.grid(row=3, column=0, sticky="ew", padx=(0, 12), ipady=4)
-        ttk.Label(inherit, text="->", style="PanelTitle.TLabel").grid(row=3, column=1, padx=10)
-        self.target_box = ttk.Combobox(inherit, textvariable=self.target_choice, state="readonly")
-        self.target_box.grid(row=3, column=2, sticky="ew", padx=(12, 12), ipady=4)
-        ttk.Button(inherit, text=self.t("inherit"), style="Primary.TButton", command=self.inherit_clicked).grid(row=3, column=3, sticky="ew")
-        log_panel = ttk.Frame(inherit, style="Panel.TFrame")
-        log_panel.grid(row=4, column=0, columnspan=4, sticky="nsew", pady=(14, 0))
-        log_panel.columnconfigure(0, weight=1)
-        self.log = Text(log_panel, height=5, relief="solid", borderwidth=1, font=("Consolas", 9), wrap="word")
-        self.log.grid(row=0, column=0, sticky="nsew")
-
-        library = self._panel(main, 2, 0, columnspan=2, pady=(12, 0))
-        library.columnconfigure(0, weight=3)
-        library.columnconfigure(1, weight=0)
-        library.columnconfigure(2, weight=2)
-        library.rowconfigure(3, weight=1)
-        ttk.Label(library, text=self.t("library"), style="PanelTitle.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Label(library, text=self.t("library_help"), style="Body.TLabel").grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 14))
-        ttk.Label(library, text=self.t("library_source"), style="Body.TLabel").grid(row=2, column=0, sticky="w")
-        ttk.Label(library, text=self.t("library_target"), style="Body.TLabel").grid(row=2, column=2, sticky="w")
-        lib_frame = Frame(library, bg="#ffffff")
-        lib_frame.grid(row=3, column=0, sticky="nsew", padx=(0, 12))
-        lib_frame.columnconfigure(0, weight=1)
-        lib_frame.rowconfigure(0, weight=1)
-        self.library_list = Listbox(lib_frame, activestyle="none", borderwidth=0, highlightthickness=1, highlightbackground="#d6dbe1", font=("Segoe UI", 10), selectbackground="#0f766e", selectforeground="#ffffff")
-        self.library_list.grid(row=0, column=0, sticky="nsew")
-        lib_scroll = Scrollbar(lib_frame, orient="vertical", command=self.library_list.yview)
-        lib_scroll.grid(row=0, column=1, sticky="ns")
-        self.library_list.configure(yscrollcommand=lib_scroll.set)
-        ttk.Label(library, text="->", style="PanelTitle.TLabel").grid(row=3, column=1, padx=10)
-        target_panel = ttk.Frame(library, style="Panel.TFrame")
-        target_panel.grid(row=3, column=2, sticky="new")
-        target_panel.columnconfigure(0, weight=1)
-        self.library_target_box = ttk.Combobox(target_panel, textvariable=self.library_target_choice, state="readonly")
-        self.library_target_box.grid(row=0, column=0, sticky="ew", ipady=4)
-        ttk.Button(target_panel, text=self.t("transfer_selected"), style="Primary.TButton", command=self.transfer_selected_library).grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        self.pages = {}
+        self._build_home_page()
+        self._build_configs_page()
+        self._build_projects_page()
+        self._build_running_page()
+        self._build_settings_page()
+        self.show_page(self.page.get())
 
         footer = ttk.Frame(outer)
-        footer.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        footer.grid(row=3, column=0, sticky="ew", pady=(12, 0))
         footer.columnconfigure(0, weight=1)
         ttk.Label(footer, textvariable=self.status, style="Sub.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(footer, text=f"Data: {APP_DIR}", style="Sub.TLabel").grid(row=0, column=1, sticky="e")
+        ttk.Label(footer, text="Codex only", style="Sub.TLabel").grid(row=0, column=1, sticky="e")
+
+    def _page(self, name):
+        page = ttk.Frame(self.page_host)
+        page.grid(row=0, column=0, sticky="nsew")
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(0, weight=1)
+        self.pages[name] = page
+        return page
+
+    def _build_listbox(self, parent, height=12):
+        frame = Frame(parent, bg="#ffffff")
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+        box = Listbox(frame, activestyle="none", borderwidth=0, highlightthickness=1, highlightbackground="#e5e7eb", font=("Segoe UI", 10), selectbackground="#1a73e8", selectforeground="#ffffff", height=height)
+        box.grid(row=0, column=0, sticky="nsew")
+        scroll = Scrollbar(frame, orient="vertical", command=box.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        box.configure(yscrollcommand=scroll.set)
+        return frame, box
+
+    def _build_home_page(self):
+        page = self._page("home")
+        panel = self._panel(page, 0, 0)
+        panel.rowconfigure(2, weight=1)
+        panel.columnconfigure(0, weight=1)
+        ttk.Label(panel, text="配置启动", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(panel, text="选择一个 API 或 ChatGPT 配置，直接启动一个 Codex 窗口。多个配置可以同时启动。", style="Body.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 14))
+        frame, self.account_list = self._build_listbox(panel, height=14)
+        frame.grid(row=2, column=0, sticky="nsew")
+        buttons = ttk.Frame(panel, style="Panel.TFrame")
+        buttons.grid(row=3, column=0, sticky="ew", pady=(14, 0))
+        buttons.columnconfigure((0, 1, 2), weight=1)
+        ttk.Button(buttons, text="启动 Codex", style="Primary.TButton", command=self.launch_selected).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        ttk.Button(buttons, text="编辑配置", command=self.edit_selected_config).grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(buttons, text="项目接力", command=self.show_projects).grid(row=0, column=2, sticky="ew", padx=(8, 0))
+
+    def _build_configs_page(self):
+        page = self._page("configs")
+        page.columnconfigure(0, weight=2)
+        page.columnconfigure(1, weight=3)
+        page.rowconfigure(0, weight=1)
+        left = self._panel(page, 0, 0, padx=(0, 12))
+        left.rowconfigure(2, weight=1)
+        left.columnconfigure(0, weight=1)
+        ttk.Label(left, text="配置列表", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(left, text="只管理 Codex 会用到的 API 与 ChatGPT 账号。", style="Body.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 12))
+        frame, self.config_list = self._build_listbox(left, height=12)
+        frame.grid(row=2, column=0, sticky="nsew")
+        self.config_list.bind("<<ListboxSelect>>", lambda _event: self.load_selected_config())
+        actions = ttk.Frame(left, style="Panel.TFrame")
+        actions.grid(row=3, column=0, sticky="ew", pady=(14, 0))
+        actions.columnconfigure((0, 1, 2), weight=1)
+        ttk.Button(actions, text="新建 API", command=self.new_api_config).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        ttk.Button(actions, text="保存", style="Primary.TButton", command=self.save_config_form).grid(row=0, column=1, sticky="ew", padx=6)
+        ttk.Button(actions, text="删除", command=self.delete_selected).grid(row=0, column=2, sticky="ew", padx=(6, 0))
+
+        form = self._panel(page, 0, 1)
+        form.columnconfigure((0, 1), weight=1)
+        ttk.Label(form, text="添加 / 编辑配置", style="PanelTitle.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(form, text="API 配置只需要名称、Key 和 API 地址；ChatGPT 账号用当前 Codex 登录或导入 auth.json。", style="Body.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 18))
+        ttk.Label(form, text="类型", style="Body.TLabel").grid(row=2, column=0, sticky="w")
+        self.config_type_box = ttk.Combobox(form, textvariable=self.config_kind, state="readonly", values=["API", "ChatGPT"])
+        self.config_type_box.grid(row=3, column=0, sticky="ew", pady=(2, 10), padx=(0, 8), ipady=4)
+        ttk.Label(form, text="配置名称", style="Body.TLabel").grid(row=2, column=1, sticky="w")
+        Entry(form, textvariable=self.config_name, font=("Segoe UI", 10), relief="solid", borderwidth=1).grid(row=3, column=1, sticky="ew", pady=(2, 10), ipady=5)
+        ttk.Label(form, text="API Key", style="Body.TLabel").grid(row=4, column=0, columnspan=2, sticky="w")
+        Entry(form, textvariable=self.config_api_key, show="*", font=("Consolas", 9), relief="solid", borderwidth=1).grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 10), ipady=5)
+        ttk.Label(form, text="API 地址", style="Body.TLabel").grid(row=6, column=0, columnspan=2, sticky="w")
+        Entry(form, textvariable=self.config_base_url, font=("Consolas", 9), relief="solid", borderwidth=1).grid(row=7, column=0, columnspan=2, sticky="ew", pady=(2, 10), ipady=5)
+        ttk.Label(form, text="备注", style="Body.TLabel").grid(row=8, column=0, columnspan=2, sticky="w")
+        Entry(form, textvariable=self.config_note, font=("Segoe UI", 10), relief="solid", borderwidth=1).grid(row=9, column=0, columnspan=2, sticky="ew", pady=(2, 12), ipady=5)
+        ttk.Label(form, text="ChatGPT 账号无需填写 API Key 和地址。选择 ChatGPT 后，点击保存会读取当前默认 Codex 登录；也可以用下面的导入。", style="Muted.TLabel").grid(row=10, column=0, columnspan=2, sticky="w")
+        lower = ttk.Frame(form, style="Panel.TFrame")
+        lower.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(18, 0))
+        lower.columnconfigure((0, 1, 2), weight=1)
+        ttk.Button(lower, text="保存配置", style="Primary.TButton", command=self.save_config_form).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        ttk.Button(lower, text="导入 ChatGPT auth.json", command=self.import_auth).grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(lower, text="清空表单", command=self.new_api_config).grid(row=0, column=2, sticky="ew", padx=(8, 0))
+
+    def _build_projects_page(self):
+        page = self._page("projects")
+        panel = self._panel(page, 0, 0)
+        panel.columnconfigure(0, weight=3)
+        panel.columnconfigure(1, weight=2)
+        panel.rowconfigure(3, weight=1)
+        ttk.Label(panel, text="统一项目", style="PanelTitle.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(panel, text="把已有项目接力到另一个 API 或账号继续做。这里保留已有能力，但不再强调技术隔离。", style="Body.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 14))
+        ttk.Label(panel, text="项目 / 对话", style="Body.TLabel").grid(row=2, column=0, sticky="w")
+        ttk.Label(panel, text="目标配置", style="Body.TLabel").grid(row=2, column=1, sticky="w")
+        frame, self.library_list = self._build_listbox(panel, height=12)
+        frame.grid(row=3, column=0, sticky="nsew", padx=(0, 12))
+        right = ttk.Frame(panel, style="Panel.TFrame")
+        right.grid(row=3, column=1, sticky="new")
+        right.columnconfigure(0, weight=1)
+        self.library_target_box = ttk.Combobox(right, textvariable=self.library_target_choice, state="readonly")
+        self.library_target_box.grid(row=0, column=0, sticky="ew", ipady=4)
+        ttk.Button(right, text="接力到此配置", style="Primary.TButton", command=self.transfer_selected_library).grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        ttk.Button(right, text="接力并启动", command=self.relay_and_launch).grid(row=2, column=0, sticky="ew", pady=(8, 0))
+
+    def _build_running_page(self):
+        page = self._page("running")
+        panel = self._panel(page, 0, 0)
+        panel.rowconfigure(2, weight=1)
+        panel.columnconfigure(0, weight=1)
+        ttk.Label(panel, text="运行中", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(panel, text="查看最近启动的 Codex 窗口。", style="Body.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 12))
+        frame, self.running_list = self._build_listbox(panel, height=12)
+        frame.grid(row=2, column=0, sticky="nsew")
+        ttk.Button(panel, text="刷新状态", command=self.refresh).grid(row=3, column=0, sticky="ew", pady=(14, 0))
+
+    def _build_settings_page(self):
+        page = self._page("settings")
+        page.columnconfigure(0, weight=1)
+        general = self._panel(page, 0, 0, pady=(0, 12))
+        general.columnconfigure(0, weight=1)
+        ttk.Label(general, text="通用", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Button(general, text=self.t("language"), command=self.toggle_language).grid(row=1, column=0, sticky="w", pady=(12, 0))
+        advanced = self._panel(page, 1, 0)
+        advanced.columnconfigure(0, weight=1)
+        ttk.Label(advanced, text="高级", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(advanced, text="Codex.exe", style="Body.TLabel").grid(row=1, column=0, sticky="w", pady=(12, 2))
+        Entry(advanced, textvariable=self.codex_path, font=("Consolas", 8), relief="solid", borderwidth=1).grid(row=2, column=0, sticky="ew", ipady=5)
+        ttk.Button(advanced, text=self.t("detect_codex"), command=self.detect_codex_path).grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        log_panel = self._panel(page, 2, 0, pady=(12, 0))
+        log_panel.columnconfigure(0, weight=1)
+        ttk.Label(log_panel, text="日志", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
+        self.log = Text(log_panel, height=7, relief="solid", borderwidth=1, font=("Consolas", 9), wrap="word")
+        self.log.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
+
+    def show_page(self, name):
+        self.page.set(name)
+        for key, page in self.pages.items():
+            if key == name:
+                page.tkraise()
+
+    def show_configs(self):
+        self.show_page("configs")
+
+    def show_projects(self):
+        self.show_page("projects")
 
     def log_line(self, message: str):
         stamp = datetime.now().strftime("%H:%M:%S")
         self.log.insert(END, f"[{stamp}] {message}\n")
         self.log.see(END)
         self.status.set(message)
+
+    def profile_summary(self, profile):
+        running = self.store.recorded_running_status(profile.key)
+        if profile.kind == PROFILE_API:
+            try:
+                creds = self.store.api_credentials(profile.key)
+                route = creds.get("base_url") or "API"
+                note = creds.get("note") or ""
+            except Exception:
+                route = "API"
+                note = ""
+            detail = f"{route}  {note}".strip()
+            return f"{profile.name}    API    {detail}    [{running}]"
+        return f"{profile.name}    ChatGPT    官方账号    [{running}]"
+
+    def new_api_config(self):
+        self.config_list.selection_clear(0, END)
+        self.config_name.set("")
+        self.config_kind.set("API")
+        self.config_api_key.set("")
+        self.config_base_url.set("")
+        self.config_note.set("")
+
+    def edit_selected_config(self):
+        key = self.selected_key()
+        if not key:
+            messagebox.showwarning(APP_NAME, self.t("select_account"))
+            return
+        if key in self.config_keys:
+            index = self.config_keys.index(key)
+            self.config_list.selection_clear(0, END)
+            self.config_list.selection_set(index)
+            self.config_list.activate(index)
+            self.load_selected_config()
+        self.show_page("configs")
+
+    def load_selected_config(self):
+        selection = self.config_list.curselection()
+        if not selection or selection[0] >= len(self.config_keys):
+            return
+        key = self.config_keys[selection[0]]
+        profile = self.store.get_profile(key)
+        if not profile:
+            return
+        self.config_name.set(profile.name)
+        self.config_kind.set("API" if profile.kind == PROFILE_API else "ChatGPT")
+        self.config_api_key.set("")
+        self.config_base_url.set("")
+        self.config_note.set("")
+        if profile.kind == PROFILE_API:
+            try:
+                creds = self.store.api_credentials(key)
+                self.config_base_url.set(creds.get("base_url", ""))
+                self.config_note.set(creds.get("note", ""))
+            except Exception:
+                pass
+
+    def selected_config_key(self):
+        selection = self.config_list.curselection()
+        if not selection or selection[0] >= len(self.config_keys):
+            return None
+        return self.config_keys[selection[0]]
+
+    def save_config_form(self):
+        name = self.config_name.get().strip()
+        if not name:
+            name = simpledialog.askstring(APP_NAME, self.t("account_name"))
+        if not name:
+            return
+        try:
+            key = self.selected_config_key()
+            if self.config_kind.get() == "API":
+                if key:
+                    profile = self.store.get_profile(key)
+                    if profile and profile.kind == PROFILE_API:
+                        saved = self.store.update_api_profile(key, name, self.config_api_key.get(), self.config_base_url.get(), self.config_note.get())
+                    else:
+                        saved = self.store.save_api_profile(name, self.config_api_key.get(), base_url=self.config_base_url.get(), note=self.config_note.get())
+                else:
+                    saved = self.store.save_api_profile(name, self.config_api_key.get(), base_url=self.config_base_url.get(), note=self.config_note.get())
+                self.config_api_key.set("")
+            else:
+                saved = self.store.save_chatgpt_from_current_auth(name)
+            self.log_line(self.t("saved", name=saved.name, kind=saved.kind))
+            self.refresh()
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, str(exc))
+
+    def relay_and_launch(self):
+        self.transfer_selected_library()
+        target = self.selected_combo_key(self.library_target_box, self.target_keys)
+        if not target:
+            return
+        if target in self.profile_keys:
+            index = self.profile_keys.index(target)
+            self.account_list.selection_clear(0, END)
+            self.account_list.selection_set(index)
+            self.account_list.activate(index)
+            self.launch_selected()
 
     def toggle_language(self):
         log_text = self.log.get("1.0", END) if hasattr(self, "log") else ""
@@ -1035,30 +1248,28 @@ class SwitchboardApp:
         profiles = self.store.list_profiles()
         digest = current_auth_digest()
         self.profile_keys = []
+        self.config_keys = []
         self.account_list.delete(0, END)
+        self.config_list.delete(0, END)
+        self.running_list.delete(0, END)
         if not profiles:
             self.account_list.insert(END, self.t("no_accounts"))
+            self.config_list.insert(END, self.t("no_accounts"))
         for profile in profiles:
-            if profile.kind == PROFILE_CHATGPT:
-                active = "default" if digest and profile.sha256 == digest else "saved"
-            else:
-                active = "api-key"
-            prepared = "ready" if (self.store.instance_dir(profile.key) / "instance.json").exists() else "new"
-            running = self.store.recorded_running_status(profile.key)
-            self.account_list.insert(END, f"{profile.name}    {profile.kind.upper()}    {profile.label}    [{active} / {prepared} / {running}]")
+            row = self.profile_summary(profile)
+            self.account_list.insert(END, row)
             self.profile_keys.append(profile.key)
+            self.config_list.insert(END, row)
+            self.config_keys.append(profile.key)
+            running = self.store.recorded_running_status(profile.key)
+            if running.startswith("running:"):
+                self.running_list.insert(END, row)
+        if self.running_list.size() == 0:
+            self.running_list.insert(END, "暂无运行中的 Codex 窗口")
         names = [f"{p.name} [{p.kind}] ({p.key})" for p in profiles]
         self.source_keys = [p.key for p in profiles]
         self.target_keys = [p.key for p in profiles]
-        self.source_box.configure(values=names)
-        self.target_box.configure(values=names)
         self.library_target_box.configure(values=names)
-        if names and not self.source_choice.get():
-            self.source_choice.set(names[0])
-        if len(names) > 1 and not self.target_choice.get():
-            self.target_choice.set(names[1])
-        elif names and not self.target_choice.get():
-            self.target_choice.set(names[0])
         if names and not self.library_target_choice.get():
             self.library_target_choice.set(names[0])
         if not self.codex_path.get():
@@ -1091,6 +1302,9 @@ class SwitchboardApp:
         if not selection or selection[0] >= len(self.profile_keys):
             return None
         return self.profile_keys[selection[0]]
+
+    def selected_any_key(self):
+        return self.selected_key() or self.selected_config_key()
 
     def selected_combo_key(self, box: ttk.Combobox, keys):
         index = box.current()
@@ -1134,7 +1348,7 @@ class SwitchboardApp:
         if not path:
             return
         default = Path(path).stem.replace(".auth", "")
-        name = self.new_name.get().strip() or simpledialog.askstring(APP_NAME, self.t("account_name"), initialvalue=default)
+        name = self.config_name.get().strip() or self.new_name.get().strip() or simpledialog.askstring(APP_NAME, self.t("account_name"), initialvalue=default)
         if not name:
             return
         try:
@@ -1176,7 +1390,7 @@ class SwitchboardApp:
             messagebox.showerror(APP_NAME, str(exc))
 
     def delete_selected(self):
-        key = self.selected_key()
+        key = self.selected_any_key()
         if not key:
             messagebox.showwarning(APP_NAME, self.t("select_account"))
             return
