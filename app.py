@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tkinter import END, Entry, Frame, Listbox, Scrollbar, StringVar, Text, Tk, filedialog, messagebox, simpledialog, ttk
+from urllib.parse import urlparse
 
 
 APP_NAME = "Codex Switchboard"
@@ -192,17 +193,65 @@ def set_toml_root_string(path: Path, key: str, value: str):
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines() if path.exists() else []
     replacement = f'{key} = "{value}"'
     updated = []
-    replaced = False
+    inserted = False
     for line in lines:
         stripped = line.strip()
         if stripped.startswith(f"{key} ") or stripped.startswith(f"{key}="):
+            continue
+        if not inserted and stripped.startswith("["):
             updated.append(replacement)
-            replaced = True
+            updated.append(line)
+            inserted = True
         else:
             updated.append(line)
-    if not replaced:
+    if not inserted:
         updated.append(replacement)
     path.write_text("\n".join(updated).rstrip() + "\n", encoding="utf-8")
+
+
+def remove_toml_section(path: Path, section: str):
+    if not path.exists():
+        return
+    header = f"[{section}]"
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    updated = []
+    skip = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == header:
+            skip = True
+            continue
+        if skip and stripped.startswith("["):
+            skip = False
+        if not skip:
+            updated.append(line)
+    path.write_text("\n".join(updated).rstrip() + "\n", encoding="utf-8")
+
+
+def append_toml_section(path: Path, section: str, values: dict):
+    remove_toml_section(path, section)
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines() if path.exists() else []
+    if lines and lines[-1].strip():
+        lines.append("")
+    lines.append(f"[{section}]")
+    for key, value in values.items():
+        if isinstance(value, bool):
+            rendered = "true" if value else "false"
+        else:
+            rendered = json.dumps(str(value), ensure_ascii=False)
+        lines.append(f"{key} = {rendered}")
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def validate_api_base_url(base_url: str):
+    if not base_url:
+        raise ValueError("API URL is required.")
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("API URL must start with http:// or https://.")
+    path = parsed.path.lower().rstrip("/")
+    if "/console" in path or path.endswith("/token"):
+        raise ValueError("API URL should be the request endpoint, not a console/token page. Use the OpenAI-compatible base URL provided by the service, usually ending in /v1.")
 
 
 def slugify(value: str) -> str:
@@ -421,10 +470,7 @@ class Store:
         base_url = base_url.strip()
         if not api_key:
             raise ValueError("API key is required.")
-        if not base_url:
-            raise ValueError("API URL is required.")
-        if base_url and not base_url.lower().startswith(("http://", "https://")):
-            raise ValueError("Base URL must start with http:// or https://.")
+        validate_api_base_url(base_url)
         key = self._next_key(name)
         payload = {
             "api_key": api_key,
@@ -463,10 +509,7 @@ class Store:
         base_url = base_url.strip()
         if not api_key:
             raise ValueError("API key is required.")
-        if not base_url:
-            raise ValueError("API URL is required.")
-        if base_url and not base_url.lower().startswith(("http://", "https://")):
-            raise ValueError("API URL must start with http:// or https://.")
+        validate_api_base_url(base_url)
         payload = {
             "api_key": api_key,
             "org_id": creds.get("org_id", ""),
@@ -483,6 +526,7 @@ class Store:
         data["sha256"] = sha256(api_key.encode("utf-8"))
         self.api_secret_path(key).write_bytes(protect_bytes(json.dumps(payload).encode("utf-8")))
         write_json(self.profile_meta_path(key), data)
+        self.prepare_instance(key)
         return profile_from_dict(data)
 
     def auth_bytes(self, key: str) -> bytes:
@@ -529,13 +573,22 @@ class Store:
             if not auth.exists():
                 auth.write_bytes(self.auth_bytes(key))
         else:
+            creds = self.api_credentials(key)
             auth = home / "auth.json"
-            if auth.exists():
-                auth.unlink()
+            auth.write_text(json.dumps({"OPENAI_API_KEY": creds["api_key"]}, ensure_ascii=False, indent=2), encoding="utf-8")
         config = home / "config.toml"
         if not config.exists() and (DEFAULT_CODEX_HOME / "config.toml").exists():
             shutil.copy2(DEFAULT_CODEX_HOME / "config.toml", config)
         set_toml_root_string(config, "preferred_auth_method", "chatgpt" if profile.kind == PROFILE_CHATGPT else "apikey")
+        if profile.kind == PROFILE_API:
+            creds = self.api_credentials(key)
+            set_toml_root_string(config, "model_provider", "switchboard_api")
+            append_toml_section(config, "model_providers.switchboard_api", {
+                "name": profile.name,
+                "base_url": creds.get("base_url", ""),
+                "wire_api": "responses",
+                "requires_openai_auth": True,
+            })
         write_json(self.instance_dir(key) / "instance.json", {
             "profile_key": key,
             "profile_name": profile.name,
